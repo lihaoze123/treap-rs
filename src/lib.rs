@@ -1,6 +1,6 @@
+use rand::random;
 use std::cmp::Ordering;
 use std::marker::PhantomData;
-use rand::random;
 use std::ptr::NonNull;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -36,6 +36,7 @@ struct Node<T> {
     siz: usize,
 }
 
+#[derive(Debug)]
 struct NodePtr<T>(NonNull<Node<T>>);
 
 impl<T> Clone for NodePtr<T> {
@@ -78,7 +79,7 @@ impl<T> NodePtr<T> {
         unsafe { (*self.0.as_ptr()).siz }
     }
 
-    fn set_cnt(&self, cnt: usize) {
+    fn set_count(&self, cnt: usize) {
         unsafe { (*self.0.as_ptr()).cnt = cnt }
     }
 
@@ -88,6 +89,10 @@ impl<T> NodePtr<T> {
 
     fn value(&self) -> &T {
         unsafe { &(*self.0.as_ptr()).value }
+    }
+
+    fn prior(&self) -> u64 {
+        unsafe { (*self.0.as_ptr()).prior }
     }
 
     unsafe fn value_ref<'a>(&self) -> &'a T {
@@ -118,10 +123,6 @@ impl<T> NodePtr<T> {
         self.set_child(Dir::Right, child);
     }
 
-    fn set_prior(&self, prior: u64) {
-        unsafe { (*self.0.as_ptr()).prior = prior }
-    }
-
     fn left(&self) -> Link<T> {
         self.child(Dir::Left)
     }
@@ -138,7 +139,7 @@ impl<T> NodePtr<T> {
     }
 
     fn pull(&self) {
-        let mut res = 1;
+        let mut res = self.count();
         res += Self::size_of(self.left());
         res += Self::size_of(self.right());
         self.set_size(res);
@@ -197,7 +198,7 @@ impl<T: Ord> NodePtr<T> {
 /// An ordered set implemented with a treap.
 ///
 /// values are kept in sorted order according to their [`Ord`] implementation.
-pub struct Treap<T> {
+pub struct Treap<T: Ord> {
     root: Link<T>,
     len: usize,
     _marker: PhantomData<Box<Node<T>>>,
@@ -213,6 +214,16 @@ impl<T: Ord> Default for Treap<T> {
 }
 
 impl<T: Ord> Treap<T> {
+    /// Creates an empty tree.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use treap::Treap;
+    ///
+    /// let tree: Treap<i32> = Treap::new();
+    /// assert!(tree.is_empty());
+    /// ```
     pub fn new() -> Self {
         Self {
             root: None,
@@ -221,12 +232,94 @@ impl<T: Ord> Treap<T> {
         }
     }
 
+    /// Returns the number of nodes in the tree.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use treap::Treap;
+    ///
+    /// let mut tree = Treap::new();
+    /// assert_eq!(tree.len(), 0);
+    ///
+    /// tree.insert(1);
+    /// tree.insert(1);
+    /// assert_eq!(tree.len(), 1);
+    ///
+    /// tree.insert(2);
+    /// assert_eq!(tree.len(), 2);
+    /// ```
     pub fn len(&self) -> usize {
         self.len
     }
 
+    /// Returns `true` if the tree contains no nodes.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use treap::Treap;
+    ///
+    /// let mut tree = Treap::new();
+    /// assert!(tree.is_empty());
+    ///
+    /// tree.insert(1);
+    /// assert!(!tree.is_empty());
+    /// ```
     pub fn is_empty(&self) -> bool {
         self.len == 0
+    }
+
+    /// Returns the number of **values** (as this is a multiset) in the tree.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use treap::Treap;
+    ///
+    /// let mut tree = Treap::new();
+    /// assert_eq!(tree.size(), 0);
+    ///
+    /// tree.insert(1);
+    /// tree.insert(1);
+    /// assert_eq!(tree.size(), 2);
+    ///
+    /// tree.insert(2);
+    /// assert_eq!(tree.size(), 3);
+    /// ```
+    pub fn size(&self) -> usize {
+        self.root.map_or(0, |root| root.size())
+    }
+
+    /// Returns an iterator over all value-number pairs in ascending value order.
+    ///
+    /// The iterator borrows the tree and yields value-number pairs `(&T, usize)`. It is also a
+    /// [`DoubleEndedIterator`], so it can be reversed with [`Iterator::rev`].
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use treap::Treap;
+    ///
+    /// let mut tree = Treap::new();
+    /// tree.insert(3);
+    /// tree.insert(3);
+    /// tree.insert(1);
+    /// tree.insert(2);
+    ///
+    /// let forward: Vec<_> = tree.iter().map(|(v, cnt)| (*v, cnt)).collect();
+    /// assert_eq!(forward, vec![(1, 1), (2, 1), (3, 2)]);
+    ///
+    /// let backward: Vec<_> = tree.iter().rev().map(|(v, cnt)| (*v, cnt)).collect();
+    /// assert_eq!(backward, vec![(3, 2), (2, 1), (1, 1)]);
+    /// ```
+    pub fn iter(&self) -> Iter<'_, T> {
+        Iter {
+            head: self.root.map(|x| x.min_node()),
+            tail: self.root.map(|x| x.max_node()),
+            len: self.len(),
+            _marker: PhantomData,
+        }
     }
 
     fn find_node(&self, value: &T) -> Link<T> {
@@ -241,16 +334,359 @@ impl<T: Ord> Treap<T> {
         None
     }
 
+    /// Returns `true` if the tree contains the value.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use treap::Treap;
+    ///
+    /// let mut tree = Treap::new();
+    /// assert!(!tree.contains(&1));
+    ///
+    /// tree.insert(1);
+    /// assert!(tree.contains(&1));
+    /// ```
     pub fn contains(&self, value: &T) -> bool {
         self.find_node(value).is_some()
     }
 
+    /// Returns the number of the value in the tree.
+    ///
+    /// Returns `0` if the tree does not contain the value.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use treap::Treap;
+    ///
+    /// let mut tree = Treap::new();
+    /// assert_eq!(tree.count(&1), 0);
+    ///
+    /// tree.insert(1);
+    /// tree.insert(1);
+    /// assert_eq!(tree.count(&1), 2);
+    /// ```
+    pub fn count(&self, value: &T) -> usize {
+        self.find_node(value).map_or(0, |node| node.count())
+    }
+
+    /// Returns a `Option<&T>`, the minimum value in the tree,
+    /// `None` if the tree does not contain the value.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use treap::Treap;
+    ///
+    /// let mut tree = Treap::new();
+    /// tree.insert(1);
+    /// tree.insert(2);
+    /// tree.insert(3);
+    ///
+    /// assert_eq!(*tree.first().unwrap(), 1);
+    /// ```
     pub fn first(&self) -> Option<&T> {
         unsafe { Some(self.root?.min_node().value_ref()) }
     }
 
+    /// Returns a `Option<&T>`, the maximum value in the tree,
+    /// `None` if the tree does not contain the value.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use treap::Treap;
+    ///
+    /// let mut tree = Treap::new();
+    /// tree.insert(1);
+    /// tree.insert(2);
+    /// tree.insert(3);
+    ///
+    /// assert_eq!(*tree.last().unwrap(), 3);
+    /// ```
     pub fn last(&self) -> Option<&T> {
         unsafe { Some(self.root?.max_node().value_ref()) }
+    }
+
+    fn rotate_toward(&mut self, node: NodePtr<T>, dir: Dir) {
+        let Some(far) = node.child(dir.opposite()) else {
+            return;
+        };
+        let far_near = far.child(dir);
+        let parent = node.parent();
+
+        far.set_parent(parent);
+        if let Some(parent) = parent {
+            parent.set_child(node.dir_from_parent().unwrap(), Some(far));
+            parent.pull();
+        } else {
+            self.root = Some(far);
+        }
+
+        node.set_parent(Some(far));
+        far.set_child(dir, Some(node));
+
+        far_near.map(|far_near| far_near.set_parent(Some(node)));
+        node.set_child(dir.opposite(), far_near);
+
+        node.pull();
+        far.pull();
+    }
+
+    fn rotate_left(&mut self, node: NodePtr<T>) {
+        self.rotate_toward(node, Dir::Left);
+    }
+
+    fn rotate_right(&mut self, node: NodePtr<T>) {
+        self.rotate_toward(node, Dir::Right);
+    }
+
+    /// Insert a value into treap.
+    ///
+    /// Returns the number of the value in the treap after the insertion.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use treap::Treap;
+    ///
+    /// let mut tree = Treap::new();
+    /// assert_eq!(tree.insert(1), 1);
+    /// assert_eq!(tree.insert(1), 2);
+    /// assert_eq!(tree.insert(2), 1);
+    /// assert!(tree.contains(&1));
+    /// assert!(tree.contains(&2));
+    /// assert!(!tree.contains(&3));
+    /// ```
+    pub fn insert(&mut self, value: T) -> usize {
+        let mut last = None;
+        let mut p = self.root;
+        while let Some(node) = p {
+            last = Some(node);
+            match value.cmp(node.value()) {
+                Ordering::Less => p = node.left(),
+                Ordering::Greater => p = node.right(),
+                Ordering::Equal => {
+                    let cnt = node.count();
+                    node.set_count(cnt + 1);
+                    node.pull();
+                    return cnt + 1;
+                }
+            }
+        }
+
+        let new_node = NodePtr::new(value);
+        if let Some(last) = last {
+            let parent = last;
+            new_node.set_parent(Some(parent.clone()));
+            if new_node.value() < parent.value() {
+                parent.set_left(Some(new_node));
+            } else {
+                parent.set_right(Some(new_node));
+            }
+        } else {
+            self.root = Some(new_node);
+        }
+
+        while let Some(parent) = new_node.parent() {
+            if new_node.prior() < parent.prior() {
+                self.rotate_toward(parent, new_node.dir_from_parent().unwrap().opposite());
+            } else {
+                break;
+            }
+        }
+
+        self.len += 1;
+
+        1
+    }
+
+    fn move_to_leaf(&mut self, node: NodePtr<T>) {
+        loop {
+            match (node.left(), node.right()) {
+                (Some(left), Some(right)) => {
+                    if left.prior() < right.prior() {
+                        self.rotate_right(node);
+                    } else {
+                        self.rotate_left(node);
+                    }
+                }
+                (Some(_), None) => {
+                    self.rotate_right(node);
+                }
+                (None, Some(_)) => {
+                    self.rotate_left(node);
+                }
+                (None, None) => {
+                    if let Some(parent) = node.parent() {
+                        parent.set_child(node.dir_from_parent().unwrap(), None);
+                    } else {
+                        self.root = None;
+                    }
+                    break;
+                }
+            }
+        }
+    }
+
+    fn release(node: NodePtr<T>) {
+        unsafe {
+            let node = Box::from_raw(node.0.as_ptr());
+            drop(node);
+        }
+    }
+
+    /// Remove one of the value in the treap.
+    ///
+    /// Returns `Option<usize>`, the number of value after deletion, `None` if the value didn't exist.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use treap::Treap;
+    ///
+    /// let mut tree = Treap::new();
+    /// tree.insert(1);
+    /// tree.insert(1);
+    /// assert_eq!(tree.remove_one_of(&1), Some(1));
+    /// assert_eq!(tree.remove_one_of(&1), Some(0));
+    /// assert_eq!(tree.remove_all_of(&1), None);
+    /// ```
+    pub fn remove_one_of(&mut self, value: &T) -> Option<usize> {
+        let node = self.find_node(value)?;
+        let cnt = node.count() - 1;
+        node.set_count(cnt);
+
+        if cnt == 0 {
+            self.move_to_leaf(node);
+            Self::release(node);
+        }
+
+        Some(cnt)
+    }
+
+    /// Remove all values of the value in the treap.
+    ///
+    /// Returns `Option<usize>`, 0 if the value existed in the tree, `None` if not.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use treap::Treap;
+    ///
+    /// let mut tree = Treap::new();
+    /// tree.insert(1);
+    /// assert_eq!(tree.remove_all_of(&1), Some(0));
+    /// assert_eq!(tree.remove_all_of(&1), None);
+    /// ```
+    pub fn remove_all_of(&mut self, value: &T) -> Option<usize> {
+        let node = self.find_node(value)?;
+        self.move_to_leaf(node);
+        Self::release(node);
+        return Some(0);
+    }
+
+    /// A alias of `remove_all_of`, be careful when you just want to remove one of the values.
+    pub fn remove(&mut self, value: &T) -> Option<usize> {
+        self.remove_all_of(value)
+    }
+
+    /// Removes all nodes from the tree.
+    ///
+    /// The tree remains usable after it is cleared.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use treap::Treap;
+    ///
+    /// let mut tree = Treap::new();
+    /// tree.insert(1);
+    /// tree.insert(2);
+    ///
+    /// tree.clear();
+    ///
+    /// assert!(tree.is_empty());
+    /// assert!(!tree.contains(&1));
+    /// ```
+    pub fn clear(&mut self) {
+        let mut stack = Vec::new();
+        if let Some(root) = self.root.take() {
+            stack.push(root);
+        }
+
+        while let Some(node) = stack.pop() {
+            if let Some(left) = node.left() {
+                stack.push(left);
+            }
+            if let Some(right) = node.right() {
+                stack.push(right);
+            }
+            unsafe {
+                drop(Box::from_raw(node.0.as_ptr()));
+            }
+        }
+
+        self.len = 0;
+    }
+}
+
+impl<T: Ord> Drop for Treap<T> {
+    fn drop(&mut self) {
+        self.clear();
+    }
+}
+
+/// An iterator over borrowed entries in an [`Treap`].
+///
+/// This iterator is created by [`Treap::iter`]. It yields values in
+/// ascending order and can also iterate from the back.
+pub struct Iter<'a, T: Ord + 'a> {
+    head: Link<T>,
+    tail: Link<T>,
+    len: usize,
+    _marker: PhantomData<&'a T>,
+}
+
+impl<'a, T: Ord + 'a> Iterator for Iter<'a, T> {
+    type Item = (&'a T, usize);
+    fn next(&mut self) -> Option<Self::Item> {
+        let p = self.head?;
+        self.len -= 1;
+
+        if self.len == 0 {
+            self.head = None;
+            self.tail = None;
+        } else {
+            self.head = p.next();
+        }
+
+        unsafe {
+            let v = &p.0.as_ref().value;
+            let cnt = p.count();
+            Some((v, cnt))
+        }
+    }
+}
+
+impl<'a, T: Ord + 'a> DoubleEndedIterator for Iter<'a, T> {
+    fn next_back(&mut self) -> Option<Self::Item> {
+        let p = self.tail?;
+        self.len -= 1;
+
+        if self.len == 0 {
+            self.head = None;
+            self.tail = None;
+        } else {
+            self.tail = p.prev();
+        }
+
+        unsafe {
+            let v = &p.0.as_ref().value;
+            let cnt = p.count();
+            Some((v, cnt))
+        }
     }
 }
 
