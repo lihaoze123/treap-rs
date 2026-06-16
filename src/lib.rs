@@ -84,7 +84,7 @@ struct NodePtr<T>(NonNull<Node<T>>);
 
 impl<T> Clone for NodePtr<T> {
     fn clone(&self) -> Self {
-        Self(self.0)
+        *self
     }
 }
 
@@ -472,7 +472,9 @@ impl<T: Ord> Treap<T> {
         node.set_parent(Some(far));
         far.set_child(dir, Some(node));
 
-        far_near.map(|far_near| far_near.set_parent(Some(node)));
+        if let Some(far_near) = far_near {
+            far_near.set_parent(Some(node))
+        }
         node.set_child(dir.opposite(), far_near);
 
         node.pull();
@@ -524,7 +526,7 @@ impl<T: Ord> Treap<T> {
         let new_node = NodePtr::new(value);
         if let Some(last) = last {
             let parent = last;
-            new_node.set_parent(Some(parent.clone()));
+            new_node.set_parent(Some(parent));
             if new_node.value() < parent.value() {
                 parent.set_left(Some(new_node));
             } else {
@@ -646,7 +648,7 @@ impl<T: Ord> Treap<T> {
         Self::release(node);
         Self::pull_up(parent);
         self.len -= 1;
-        return Some(0);
+        Some(0)
     }
 
     /// An alias for [`Treap::remove_all_of`].
