@@ -1,3 +1,46 @@
+//! An ordered multiset implemented with a randomized treap.
+//!
+//! This crate provides [`Treap`], a collection that stores values in sorted
+//! order and keeps a count for duplicate values. It supports insertion,
+//! deletion, membership queries, iteration in both directions, and
+//! order-statistics operations such as [`Treap::kth`] and [`Treap::rank`].
+//!
+//! A treap combines a binary search tree over values with a heap over random
+//! priorities, giving expected logarithmic-time updates and queries.
+//!
+//! # Distinct Values And Duplicates
+//!
+//! [`Treap::len`] returns the number of distinct values, while [`Treap::size`]
+//! returns the total number of stored values, counting duplicates.
+//!
+//! # Examples
+//!
+//! ```
+//! use treap::Treap;
+//!
+//! let mut tree = Treap::new();
+//! tree.insert(3);
+//! tree.insert(1);
+//! tree.insert(3);
+//! tree.insert(2);
+//!
+//! assert_eq!(tree.len(), 3);
+//! assert_eq!(tree.size(), 4);
+//! assert_eq!(tree.count(&3), 2);
+//!
+//! let items: Vec<_> = tree.iter().map(|(value, count)| (*value, count)).collect();
+//! assert_eq!(items, vec![(1, 1), (2, 1), (3, 2)]);
+//!
+//! assert_eq!(tree.kth(3), Some(&3));
+//! assert_eq!(tree.rank(&3), 3);
+//! assert_eq!(tree.predecessor(&3), Some(&2));
+//! assert_eq!(tree.successor(&2), Some(&3));
+//!
+//! assert_eq!(tree.remove_one_of(&3), Some(1));
+//! assert_eq!(tree.remove_all_of(&3), Some(0));
+//! assert!(!tree.contains(&3));
+//! ```
+
 use rand::random;
 use std::cmp::Ordering;
 use std::marker::PhantomData;
@@ -195,9 +238,10 @@ impl<T: Ord> NodePtr<T> {
     }
 }
 
-/// An ordered set implemented with a treap.
+/// An ordered multiset implemented with a treap.
 ///
-/// values are kept in sorted order according to their [`Ord`] implementation.
+/// Values are kept in sorted order according to their [`Ord`] implementation.
+/// Duplicate values are stored once and tracked with a count.
 pub struct Treap<T: Ord> {
     root: Link<T>,
     len: usize,
@@ -232,7 +276,7 @@ impl<T: Ord> Treap<T> {
         }
     }
 
-    /// Returns the number of nodes in the tree.
+    /// Returns the number of distinct values in the tree.
     ///
     /// # Examples
     ///
@@ -253,7 +297,7 @@ impl<T: Ord> Treap<T> {
         self.len
     }
 
-    /// Returns `true` if the tree contains no nodes.
+    /// Returns `true` if the tree contains no values.
     ///
     /// # Examples
     ///
@@ -270,7 +314,7 @@ impl<T: Ord> Treap<T> {
         self.len == 0
     }
 
-    /// Returns the number of **values** (as this is a multiset) in the tree.
+    /// Returns the total number of stored values, counting duplicates.
     ///
     /// # Examples
     ///
@@ -291,9 +335,9 @@ impl<T: Ord> Treap<T> {
         self.root.map_or(0, |root| root.size())
     }
 
-    /// Returns an iterator over all value-number pairs in ascending value order.
+    /// Returns an iterator over all value-count pairs in ascending value order.
     ///
-    /// The iterator borrows the tree and yields value-number pairs `(&T, usize)`. It is also a
+    /// The iterator borrows the tree and yields value-count pairs `(&T, usize)`. It is also a
     /// [`DoubleEndedIterator`], so it can be reversed with [`Iterator::rev`].
     ///
     /// # Examples
@@ -351,7 +395,7 @@ impl<T: Ord> Treap<T> {
         self.find_node(value).is_some()
     }
 
-    /// Returns the number of the value in the tree.
+    /// Returns the number of copies of `value` in the tree.
     ///
     /// Returns `0` if the tree does not contain the value.
     ///
@@ -371,8 +415,9 @@ impl<T: Ord> Treap<T> {
         self.find_node(value).map_or(0, |node| node.count())
     }
 
-    /// Returns a `Option<&T>`, the minimum value in the tree,
-    /// `None` if the tree does not contain the value.
+    /// Returns the minimum value in the tree.
+    ///
+    /// Returns `None` if the tree is empty.
     ///
     /// # Examples
     ///
@@ -390,8 +435,9 @@ impl<T: Ord> Treap<T> {
         unsafe { Some(self.root?.min_node().value_ref()) }
     }
 
-    /// Returns a `Option<&T>`, the maximum value in the tree,
-    /// `None` if the tree does not contain the value.
+    /// Returns the maximum value in the tree.
+    ///
+    /// Returns `None` if the tree is empty.
     ///
     /// # Examples
     ///
@@ -441,9 +487,9 @@ impl<T: Ord> Treap<T> {
         self.rotate_toward(node, Dir::Right);
     }
 
-    /// Insert a value into treap.
+    /// Inserts a value into the treap.
     ///
-    /// Returns the number of the value in the treap after the insertion.
+    /// Returns the number of copies of that value after the insertion.
     ///
     /// # Examples
     ///
@@ -546,9 +592,10 @@ impl<T: Ord> Treap<T> {
         }
     }
 
-    /// Remove one of the value in the treap.
+    /// Removes one copy of `value` from the treap.
     ///
-    /// Returns `Option<usize>`, the number of value after deletion, `None` if the value didn't exist.
+    /// Returns the remaining number of copies after deletion, or `None` if
+    /// the value was not present.
     ///
     /// # Examples
     ///
@@ -579,9 +626,9 @@ impl<T: Ord> Treap<T> {
         Some(cnt)
     }
 
-    /// Remove all values of the value in the treap.
+    /// Removes all copies of `value` from the treap.
     ///
-    /// Returns `Option<usize>`, 0 if the value existed in the tree, `None` if not.
+    /// Returns `Some(0)` if the value was present, or `None` otherwise.
     ///
     /// # Examples
     ///
@@ -602,9 +649,186 @@ impl<T: Ord> Treap<T> {
         return Some(0);
     }
 
-    /// A alias of `remove_all_of`, be careful when you just want to remove one of the values.
+    /// An alias for [`Treap::remove_all_of`].
+    ///
+    /// Use [`Treap::remove_one_of`] when you only want to remove one copy.
     pub fn remove(&mut self, value: &T) -> Option<usize> {
         self.remove_all_of(value)
+    }
+
+    /// Returns the 1-indexed k-th value in sorted order, counting duplicates.
+    ///
+    /// Returns `None` when `rank` is `0` or greater than [`Treap::size`].
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use treap::Treap;
+    ///
+    /// let mut tree = Treap::new();
+    /// tree.insert(1);
+    /// tree.insert(2);
+    /// tree.insert(2);
+    /// tree.insert(4);
+    ///
+    /// assert_eq!(tree.kth(1), Some(&1));
+    /// assert_eq!(tree.kth(2), Some(&2));
+    /// assert_eq!(tree.kth(3), Some(&2));
+    /// assert_eq!(tree.kth(4), Some(&4));
+    /// assert_eq!(tree.kth(0), None);
+    /// assert_eq!(tree.kth(5), None);
+    /// ```
+    pub fn kth(&self, mut rank: usize) -> Option<&T> {
+        if !(1 <= rank && rank <= self.size()) {
+            return None;
+        }
+        let mut p = self.root?;
+        loop {
+            let left = NodePtr::size_of(p.left());
+            let cnt = p.count();
+
+            if left >= rank {
+                p = p.left()?;
+            } else if left + cnt >= rank {
+                return Some(unsafe { p.value_ref() });
+            } else {
+                p = p.right()?;
+                rank -= left + cnt;
+            }
+        }
+    }
+
+    /// Returns the 1-indexed lower-bound rank of `value`.
+    ///
+    /// This is the number of stored values strictly less than `value`, plus one.
+    /// Duplicate values share the same rank.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use treap::Treap;
+    ///
+    /// let mut tree = Treap::new();
+    /// tree.insert(1);
+    /// tree.insert(2);
+    /// tree.insert(2);
+    /// tree.insert(4);
+    ///
+    /// assert_eq!(tree.rank(&0), 1);
+    /// assert_eq!(tree.rank(&1), 1);
+    /// assert_eq!(tree.rank(&2), 2);
+    /// assert_eq!(tree.rank(&3), 4);
+    /// assert_eq!(tree.rank(&4), 4);
+    /// assert_eq!(tree.rank(&5), 5);
+    /// ```
+    pub fn rank(&self, value: &T) -> usize {
+        let Some(mut p) = self.root else { return 1 };
+        let mut res = 1;
+        loop {
+            match value.cmp(p.value()) {
+                Ordering::Greater => {
+                    res += NodePtr::size_of(p.left()) + p.count();
+                    if let Some(node) = p.right() {
+                        p = node;
+                    } else {
+                        return res;
+                    }
+                }
+                Ordering::Less | Ordering::Equal => {
+                    if let Some(node) = p.left() {
+                        p = node;
+                    } else {
+                        return res;
+                    }
+                }
+            }
+        }
+    }
+
+    /// Returns the greatest stored value strictly less than `value`.
+    ///
+    /// Returns `None` if no stored value is less than `value`.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use treap::Treap;
+    ///
+    /// let mut tree = Treap::new();
+    /// tree.insert(1);
+    /// tree.insert(2);
+    /// tree.insert(2);
+    /// tree.insert(4);
+    ///
+    /// assert_eq!(tree.predecessor(&1), None);
+    /// assert_eq!(tree.predecessor(&2), Some(&1));
+    /// assert_eq!(tree.predecessor(&3), Some(&2));
+    /// assert_eq!(tree.predecessor(&5), Some(&4));
+    /// ```
+    pub fn predecessor(&self, value: &T) -> Option<&T> {
+        unsafe { Some(self._predecessor(value)?.value_ref()) }
+    }
+
+    /// Returns the smallest stored value strictly greater than `value`.
+    ///
+    /// Returns `None` if no stored value is greater than `value`.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use treap::Treap;
+    ///
+    /// let mut tree = Treap::new();
+    /// tree.insert(1);
+    /// tree.insert(2);
+    /// tree.insert(2);
+    /// tree.insert(4);
+    ///
+    /// assert_eq!(tree.successor(&0), Some(&1));
+    /// assert_eq!(tree.successor(&1), Some(&2));
+    /// assert_eq!(tree.successor(&2), Some(&4));
+    /// assert_eq!(tree.successor(&4), None);
+    /// ```
+    pub fn successor(&self, value: &T) -> Option<&T> {
+        unsafe { Some(self._successor(value)?.value_ref()) }
+    }
+
+    fn _predecessor(&self, value: &T) -> Link<T> {
+        let mut p = self.root;
+        let mut ans = None;
+
+        while let Some(node) = p {
+            match value.cmp(node.value()) {
+                Ordering::Greater => {
+                    ans = Some(node);
+                    p = node.right();
+                }
+                Ordering::Less | Ordering::Equal => {
+                    p = node.left();
+                }
+            }
+        }
+
+        ans
+    }
+
+    fn _successor(&self, value: &T) -> Link<T> {
+        let mut p = self.root;
+        let mut ans = None;
+
+        while let Some(node) = p {
+            match value.cmp(node.value()) {
+                Ordering::Less => {
+                    ans = Some(node);
+                    p = node.left();
+                }
+                Ordering::Greater | Ordering::Equal => {
+                    p = node.right();
+                }
+            }
+        }
+
+        ans
     }
 
     /// Removes all nodes from the tree.
@@ -742,6 +966,37 @@ mod tests {
         model.iter().map(|(&v, &cnt)| (v, cnt)).collect()
     }
 
+    fn model_kth(model: &BTreeMap<i32, usize>, rank: usize) -> Option<i32> {
+        if rank == 0 {
+            return None;
+        }
+
+        let mut rest = rank;
+        for (&value, &cnt) in model {
+            if rest <= cnt {
+                return Some(value);
+            }
+            rest -= cnt;
+        }
+
+        None
+    }
+
+    fn model_rank(model: &BTreeMap<i32, usize>, value: i32) -> usize {
+        model.range(..value).map(|(_, &cnt)| cnt).sum::<usize>() + 1
+    }
+
+    fn model_predecessor(model: &BTreeMap<i32, usize>, value: i32) -> Option<i32> {
+        model.range(..value).next_back().map(|(&v, _)| v)
+    }
+
+    fn model_successor(model: &BTreeMap<i32, usize>, value: i32) -> Option<i32> {
+        model
+            .range((std::ops::Bound::Excluded(value), std::ops::Bound::Unbounded))
+            .next()
+            .map(|(&v, _)| v)
+    }
+
     fn check_subtree(
         node: Link<i32>,
         parent: Link<i32>,
@@ -840,6 +1095,21 @@ mod tests {
         for x in -105..=105 {
             prop_assert_eq!(treap.contains(&x), model.contains_key(&x));
             prop_assert_eq!(treap.count(&x), *model.get(&x).unwrap_or(&0));
+        }
+
+        prop_assert_eq!(treap.kth(0).copied(), None);
+        prop_assert_eq!(treap.kth(model_size(model) + 1).copied(), None);
+
+        for rank in [1, (model_size(model) + 1) / 2, model_size(model)] {
+            if rank > 0 {
+                prop_assert_eq!(treap.kth(rank).copied(), model_kth(model, rank));
+            }
+        }
+
+        for x in [-105, -100, -1, 0, 1, 100, 105] {
+            prop_assert_eq!(treap.rank(&x), model_rank(model, x));
+            prop_assert_eq!(treap.predecessor(&x).copied(), model_predecessor(model, x));
+            prop_assert_eq!(treap.successor(&x).copied(), model_successor(model, x));
         }
 
         assert_internal_invariants(treap)?;
@@ -1010,5 +1280,100 @@ mod tests {
                 assert_public_state(&treap, &model)?;
             }
         }
+
+        #[test]
+        fn order_statistics_match_model(
+            ops in proptest::collection::vec((0u8..4, -50i32..50), 0..300),
+            rank_queries in proptest::collection::vec(0usize..400, 0..100),
+            value_queries in proptest::collection::vec(-60i32..60, 0..100),
+        ) {
+            let mut treap = Treap::new();
+            let mut model = BTreeMap::new();
+
+            for (op, x) in ops {
+                match op {
+                    0 => {
+                        let expected = model_insert(&mut model, x);
+                        prop_assert_eq!(treap.insert(x), expected);
+                    }
+                    1 => {
+                        let expected = model_remove_one(&mut model, x);
+                        prop_assert_eq!(treap.remove_one_of(&x), expected);
+                    }
+                    2 => {
+                        let expected = model_remove_all(&mut model, x);
+                        prop_assert_eq!(treap.remove_all_of(&x), expected);
+                    }
+                    _ => {
+                        prop_assert_eq!(treap.count(&x), *model.get(&x).unwrap_or(&0));
+                    }
+                }
+            }
+
+            assert_public_state(&treap, &model)?;
+
+            for rank in rank_queries {
+                prop_assert_eq!(treap.kth(rank).copied(), model_kth(&model, rank));
+            }
+
+            for value in value_queries {
+                prop_assert_eq!(treap.rank(&value), model_rank(&model, value));
+                prop_assert_eq!(
+                    treap.predecessor(&value).copied(),
+                    model_predecessor(&model, value)
+                );
+                prop_assert_eq!(
+                    treap.successor(&value).copied(),
+                    model_successor(&model, value)
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn order_statistics_count_duplicates() {
+        let mut treap = Treap::new();
+        for x in [2, 4, 2, 1, 4, 4] {
+            treap.insert(x);
+        }
+
+        assert_eq!(treap.len(), 3);
+        assert_eq!(treap.size(), 6);
+
+        assert_eq!(treap.kth(0), None);
+        assert_eq!(treap.kth(1), Some(&1));
+        assert_eq!(treap.kth(2), Some(&2));
+        assert_eq!(treap.kth(3), Some(&2));
+        assert_eq!(treap.kth(4), Some(&4));
+        assert_eq!(treap.kth(5), Some(&4));
+        assert_eq!(treap.kth(6), Some(&4));
+        assert_eq!(treap.kth(7), None);
+
+        assert_eq!(treap.rank(&0), 1);
+        assert_eq!(treap.rank(&1), 1);
+        assert_eq!(treap.rank(&2), 2);
+        assert_eq!(treap.rank(&3), 4);
+        assert_eq!(treap.rank(&4), 4);
+        assert_eq!(treap.rank(&5), 7);
+
+        assert_eq!(treap.predecessor(&1), None);
+        assert_eq!(treap.predecessor(&2), Some(&1));
+        assert_eq!(treap.predecessor(&3), Some(&2));
+        assert_eq!(treap.predecessor(&5), Some(&4));
+
+        assert_eq!(treap.successor(&0), Some(&1));
+        assert_eq!(treap.successor(&1), Some(&2));
+        assert_eq!(treap.successor(&2), Some(&4));
+        assert_eq!(treap.successor(&4), None);
+
+        assert_eq!(treap.remove_one_of(&4), Some(2));
+        assert_eq!(treap.kth(4), Some(&4));
+        assert_eq!(treap.rank(&5), 6);
+
+        assert_eq!(treap.remove_all_of(&2), Some(0));
+        assert_eq!(treap.kth(2), Some(&4));
+        assert_eq!(treap.rank(&4), 2);
+        assert_eq!(treap.predecessor(&4), Some(&1));
+        assert_eq!(treap.successor(&1), Some(&4));
     }
 }
