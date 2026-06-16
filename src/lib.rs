@@ -419,7 +419,6 @@ impl<T: Ord> Treap<T> {
         far.set_parent(parent);
         if let Some(parent) = parent {
             parent.set_child(node.dir_from_parent().unwrap(), Some(far));
-            parent.pull();
         } else {
             self.root = Some(far);
         }
@@ -470,7 +469,7 @@ impl<T: Ord> Treap<T> {
                 Ordering::Equal => {
                     let cnt = node.count();
                     node.set_count(cnt + 1);
-                    node.pull();
+                    Self::pull_up(Some(node));
                     return cnt + 1;
                 }
             }
@@ -498,11 +497,12 @@ impl<T: Ord> Treap<T> {
         }
 
         self.len += 1;
+        Self::pull_up(Some(new_node));
 
         1
     }
 
-    fn move_to_leaf(&mut self, node: NodePtr<T>) {
+    fn move_to_leaf(&mut self, node: NodePtr<T>) -> Link<T> {
         loop {
             match (node.left(), node.right()) {
                 (Some(left), Some(right)) => {
@@ -519,14 +519,23 @@ impl<T: Ord> Treap<T> {
                     self.rotate_left(node);
                 }
                 (None, None) => {
-                    if let Some(parent) = node.parent() {
+                    let parent = node.parent();
+                    if let Some(parent) = parent {
                         parent.set_child(node.dir_from_parent().unwrap(), None);
                     } else {
                         self.root = None;
                     }
-                    break;
+                    node.set_parent(None);
+                    return parent;
                 }
             }
+        }
+    }
+    
+    fn pull_up(mut node: Link<T>) {
+        while let Some(p) = node {
+            p.pull();
+            node = p.parent();
         }
     }
 
@@ -556,11 +565,15 @@ impl<T: Ord> Treap<T> {
     pub fn remove_one_of(&mut self, value: &T) -> Option<usize> {
         let node = self.find_node(value)?;
         let cnt = node.count() - 1;
+
         node.set_count(cnt);
+        Self::pull_up(Some(node));
 
         if cnt == 0 {
-            self.move_to_leaf(node);
+            let parent = self.move_to_leaf(node);
+            self.len -= 1;
             Self::release(node);
+            Self::pull_up(parent);
         }
 
         Some(cnt)
@@ -582,8 +595,10 @@ impl<T: Ord> Treap<T> {
     /// ```
     pub fn remove_all_of(&mut self, value: &T) -> Option<usize> {
         let node = self.find_node(value)?;
-        self.move_to_leaf(node);
+        let parent = self.move_to_leaf(node);
         Self::release(node);
+        Self::pull_up(parent);
+        self.len -= 1;
         return Some(0);
     }
 
@@ -850,7 +865,7 @@ mod tests {
         #![proptest_config(Config {
             cases: 256,
             max_shrink_iters: 10_000,
-            .. ProptestConfig::default()
+            .. Config::default()
         })]
 
         #[test]
