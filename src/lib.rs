@@ -531,7 +531,7 @@ impl<T: Ord> Treap<T> {
             }
         }
     }
-    
+
     fn pull_up(mut node: Link<T>) {
         while let Some(p) = node {
             p.pull();
@@ -703,7 +703,6 @@ impl<'a, T: Ord + 'a> DoubleEndedIterator for Iter<'a, T> {
             Some((v, cnt))
         }
     }
-
 }
 
 #[cfg(test)]
@@ -781,21 +780,11 @@ mod tests {
             prop_assert!(node.prior() <= right.prior());
         }
 
-        let (left_len, left_size) = check_subtree(
-            node.left(),
-            Some(node),
-            lower,
-            Some(value),
-            seen,
-        )?;
+        let (left_len, left_size) =
+            check_subtree(node.left(), Some(node), lower, Some(value), seen)?;
 
-        let (right_len, right_size) = check_subtree(
-            node.right(),
-            Some(node),
-            Some(value),
-            upper,
-            seen,
-        )?;
+        let (right_len, right_size) =
+            check_subtree(node.right(), Some(node), Some(value), upper, seen)?;
 
         let expected_size = node.count() + left_size + right_size;
 
@@ -811,8 +800,7 @@ mod tests {
             prop_assert_eq!(root.parent(), None);
         }
 
-        let (node_count, total_size) =
-            check_subtree(treap.root, None, None, None, &mut seen)?;
+        let (node_count, total_size) = check_subtree(treap.root, None, None, None, &mut seen)?;
 
         prop_assert_eq!(node_count, treap.len());
         prop_assert_eq!(total_size, treap.size());
@@ -828,15 +816,9 @@ mod tests {
         prop_assert_eq!(treap.size(), model_size(model));
         prop_assert_eq!(treap.is_empty(), model.is_empty());
 
-        prop_assert_eq!(
-            treap.first().copied(),
-            model.keys().next().copied(),
-        );
+        prop_assert_eq!(treap.first().copied(), model.keys().next().copied(),);
 
-        prop_assert_eq!(
-            treap.last().copied(),
-            model.keys().next_back().copied(),
-        );
+        prop_assert_eq!(treap.last().copied(), model.keys().next_back().copied(),);
 
         prop_assert_eq!(
             treap.iter().map(|(v, cnt)| (*v, cnt)).collect::<Vec<_>>(),
@@ -847,7 +829,11 @@ mod tests {
         backward.reverse();
 
         prop_assert_eq!(
-            treap.iter().rev().map(|(v, cnt)| (*v, cnt)).collect::<Vec<_>>(),
+            treap
+                .iter()
+                .rev()
+                .map(|(v, cnt)| (*v, cnt))
+                .collect::<Vec<_>>(),
             backward,
         );
 
