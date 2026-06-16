@@ -688,10 +688,326 @@ impl<'a, T: Ord + 'a> DoubleEndedIterator for Iter<'a, T> {
             Some((v, cnt))
         }
     }
+
 }
 
 #[cfg(test)]
 mod tests {
-    #[test]
-    fn it_works() {}
+    use super::*;
+    use proptest::prelude::*;
+    use proptest::test_runner::{Config, TestCaseError};
+    use std::collections::{BTreeMap, HashSet, VecDeque};
+
+    fn model_insert(model: &mut BTreeMap<i32, usize>, x: i32) -> usize {
+        let cnt = model.entry(x).or_insert(0);
+        *cnt += 1;
+        *cnt
+    }
+
+    fn model_remove_one(model: &mut BTreeMap<i32, usize>, x: i32) -> Option<usize> {
+        let cnt = model.get_mut(&x)?;
+        *cnt -= 1;
+        let rest = *cnt;
+
+        if rest == 0 {
+            model.remove(&x);
+        }
+
+        Some(rest)
+    }
+
+    fn model_remove_all(model: &mut BTreeMap<i32, usize>, x: i32) -> Option<usize> {
+        model.remove(&x).map(|_| 0)
+    }
+
+    fn model_size(model: &BTreeMap<i32, usize>) -> usize {
+        model.values().sum()
+    }
+
+    fn model_items(model: &BTreeMap<i32, usize>) -> Vec<(i32, usize)> {
+        model.iter().map(|(&v, &cnt)| (v, cnt)).collect()
+    }
+
+    fn check_subtree(
+        node: Link<i32>,
+        parent: Link<i32>,
+        lower: Option<i32>,
+        upper: Option<i32>,
+        seen: &mut HashSet<usize>,
+    ) -> Result<(usize, usize), TestCaseError> {
+        let Some(node) = node else {
+            return Ok((0, 0));
+        };
+
+        let addr = node.0.as_ptr() as usize;
+        prop_assert!(seen.insert(addr), "cycle detected");
+
+        prop_assert_eq!(node.parent(), parent);
+
+        let value = *node.value();
+
+        if let Some(lower) = lower {
+            prop_assert!(lower < value);
+        }
+
+        if let Some(upper) = upper {
+            prop_assert!(value < upper);
+        }
+
+        prop_assert!(node.count() > 0);
+
+        if let Some(left) = node.left() {
+            prop_assert_eq!(left.parent(), Some(node));
+            prop_assert!(node.prior() <= left.prior());
+        }
+
+        if let Some(right) = node.right() {
+            prop_assert_eq!(right.parent(), Some(node));
+            prop_assert!(node.prior() <= right.prior());
+        }
+
+        let (left_len, left_size) = check_subtree(
+            node.left(),
+            Some(node),
+            lower,
+            Some(value),
+            seen,
+        )?;
+
+        let (right_len, right_size) = check_subtree(
+            node.right(),
+            Some(node),
+            Some(value),
+            upper,
+            seen,
+        )?;
+
+        let expected_size = node.count() + left_size + right_size;
+
+        prop_assert_eq!(node.size(), expected_size);
+
+        Ok((1 + left_len + right_len, expected_size))
+    }
+
+    fn assert_internal_invariants(treap: &Treap<i32>) -> Result<(), TestCaseError> {
+        let mut seen = HashSet::new();
+
+        if let Some(root) = treap.root {
+            prop_assert_eq!(root.parent(), None);
+        }
+
+        let (node_count, total_size) =
+            check_subtree(treap.root, None, None, None, &mut seen)?;
+
+        prop_assert_eq!(node_count, treap.len());
+        prop_assert_eq!(total_size, treap.size());
+
+        Ok(())
+    }
+
+    fn assert_public_state(
+        treap: &Treap<i32>,
+        model: &BTreeMap<i32, usize>,
+    ) -> Result<(), TestCaseError> {
+        prop_assert_eq!(treap.len(), model.len());
+        prop_assert_eq!(treap.size(), model_size(model));
+        prop_assert_eq!(treap.is_empty(), model.is_empty());
+
+        prop_assert_eq!(
+            treap.first().copied(),
+            model.keys().next().copied(),
+        );
+
+        prop_assert_eq!(
+            treap.last().copied(),
+            model.keys().next_back().copied(),
+        );
+
+        prop_assert_eq!(
+            treap.iter().map(|(v, cnt)| (*v, cnt)).collect::<Vec<_>>(),
+            model_items(model),
+        );
+
+        let mut backward = model_items(model);
+        backward.reverse();
+
+        prop_assert_eq!(
+            treap.iter().rev().map(|(v, cnt)| (*v, cnt)).collect::<Vec<_>>(),
+            backward,
+        );
+
+        for x in -105..=105 {
+            prop_assert_eq!(treap.contains(&x), model.contains_key(&x));
+            prop_assert_eq!(treap.count(&x), *model.get(&x).unwrap_or(&0));
+        }
+
+        assert_internal_invariants(treap)?;
+
+        Ok(())
+    }
+
+    proptest! {
+        #![proptest_config(Config {
+            cases: 256,
+            max_shrink_iters: 10_000,
+            .. ProptestConfig::default()
+        })]
+
+        #[test]
+        fn treap_matches_btreemap_multiset(
+            ops in proptest::collection::vec((0u8..5, -100i32..100), 0..1000),
+        ) {
+            let mut treap = Treap::new();
+            let mut model = BTreeMap::new();
+
+            for (op, x) in ops {
+                match op {
+                    0 => {
+                        let expected = model_insert(&mut model, x);
+                        prop_assert_eq!(treap.insert(x), expected);
+                    }
+                    1 => {
+                        let expected = model_remove_one(&mut model, x);
+                        prop_assert_eq!(treap.remove_one_of(&x), expected);
+                    }
+                    2 => {
+                        let expected = model_remove_all(&mut model, x);
+                        prop_assert_eq!(treap.remove_all_of(&x), expected);
+                    }
+                    3 => {
+                        let expected = model_remove_all(&mut model, x);
+                        prop_assert_eq!(treap.remove(&x), expected);
+                    }
+                    _ => {
+                        prop_assert_eq!(treap.contains(&x), model.contains_key(&x));
+                        prop_assert_eq!(treap.count(&x), *model.get(&x).unwrap_or(&0));
+                    }
+                }
+
+                assert_public_state(&treap, &model)?;
+            }
+        }
+
+        #[test]
+        fn duplicate_insert_and_remove_one_counts_are_correct(
+            xs in proptest::collection::vec(-20i32..20, 0..500),
+        ) {
+            let mut treap = Treap::new();
+            let mut model = BTreeMap::new();
+
+            for &x in &xs {
+                let expected = model_insert(&mut model, x);
+                prop_assert_eq!(treap.insert(x), expected);
+                prop_assert_eq!(treap.count(&x), expected);
+                assert_public_state(&treap, &model)?;
+            }
+
+            for &x in &xs {
+                let expected = model_remove_one(&mut model, x);
+                prop_assert_eq!(treap.remove_one_of(&x), expected);
+                assert_public_state(&treap, &model)?;
+            }
+        }
+
+        #[test]
+        fn clear_resets_tree_and_tree_remains_reusable(
+            xs in proptest::collection::vec(-100i32..100, 0..500),
+            ys in proptest::collection::vec(-100i32..100, 0..500),
+        ) {
+            let mut treap = Treap::new();
+            let mut model = BTreeMap::new();
+
+            for x in xs {
+                let expected = model_insert(&mut model, x);
+                prop_assert_eq!(treap.insert(x), expected);
+            }
+
+            assert_public_state(&treap, &model)?;
+
+            treap.clear();
+            model.clear();
+
+            assert_public_state(&treap, &model)?;
+
+            for y in ys {
+                let expected = model_insert(&mut model, y);
+                prop_assert_eq!(treap.insert(y), expected);
+                assert_public_state(&treap, &model)?;
+            }
+        }
+
+        #[test]
+        fn double_ended_iterator_matches_model(
+            xs in proptest::collection::vec(-50i32..50, 0..300),
+            choices in proptest::collection::vec(any::<bool>(), 0..400),
+        ) {
+            let mut treap = Treap::new();
+            let mut model = BTreeMap::new();
+
+            for x in xs {
+                model_insert(&mut model, x);
+                treap.insert(x);
+            }
+
+            assert_public_state(&treap, &model)?;
+
+            let mut expected: VecDeque<_> = model_items(&model).into_iter().collect();
+            let mut iter = treap.iter();
+
+            for take_front in choices {
+                let got = if take_front {
+                    iter.next()
+                } else {
+                    iter.next_back()
+                }
+                .map(|(v, cnt)| (*v, cnt));
+
+                let expected_item = if take_front {
+                    expected.pop_front()
+                } else {
+                    expected.pop_back()
+                };
+
+                prop_assert_eq!(got, expected_item);
+            }
+
+            let rest = iter.map(|(v, cnt)| (*v, cnt)).collect::<Vec<_>>();
+            let expected_rest = expected.into_iter().collect::<Vec<_>>();
+
+            prop_assert_eq!(rest, expected_rest);
+        }
+
+        #[test]
+        fn first_last_are_consistent_after_random_updates(
+            ops in proptest::collection::vec((0u8..4, -100i32..100), 0..1000),
+        ) {
+            let mut treap = Treap::new();
+            let mut model = BTreeMap::new();
+
+            for (op, x) in ops {
+                match op {
+                    0 => {
+                        model_insert(&mut model, x);
+                        treap.insert(x);
+                    }
+                    1 => {
+                        model_remove_one(&mut model, x);
+                        treap.remove_one_of(&x);
+                    }
+                    2 => {
+                        model_remove_all(&mut model, x);
+                        treap.remove_all_of(&x);
+                    }
+                    _ => {
+                        prop_assert_eq!(treap.contains(&x), model.contains_key(&x));
+                    }
+                }
+
+                prop_assert_eq!(treap.first().copied(), model.keys().next().copied());
+                prop_assert_eq!(treap.last().copied(), model.keys().next_back().copied());
+
+                assert_public_state(&treap, &model)?;
+            }
+        }
+    }
 }
